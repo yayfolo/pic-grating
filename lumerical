@@ -1,0 +1,233 @@
+# ===== GC_2D_xy_TE0_relation_sweep_NO_CONTINUE_CLAD_EDGE_WITH_OUTWG.lsf =====
+# 扫描 Λ ∈ [600nm,1300nm], step=20nm，满足 1.2361Λ + 1.4008w = λ0（λ0=1550nm）
+# => ff = w/Λ = (λ0 - 1.2361Λ) / (1.4008Λ)
+# 2D=XY（物理 Z→Y）。波导沿 +X，光栅把能量耦到 +Y（=物理 +Z）。
+# TE0 输入在 2D-XY 中用 fundamental TM；监视 grating 正上方功率，计算效率。
+# 监视器紧贴 cladding 顶边内侧（y = thick_Si + thick_Clad - 10nm）。
+# 在 grating 之后补一段输出波导（与输入波导相同厚度）。
+
+newproject; clear; deleteall; switchtolayout;
+
+# -------- 固定参数（除周期/ff外不变）--------
+gc_number  = 50;        # 齿数（=周期数），保证恰好 50 个
+thick_Si   = 0.22e-6;   # 硅层 220 nm（全刻蚀）
+thick_BOX  = 2.0e-6;    # BOX 2 µm
+thick_Clad = 5.26e-6;   # 上包层 5.26 µm
+Si_sub     = 0;         # 衬底厚度（此处设为 0）
+lambda0    = 1550e-9;   # 工作波长 1550 nm
+
+mat_Si   = "Si (Silicon) - Palik";
+mat_SiO2 = "SiO2 (Glass) - Palik";
+
+# 扫描设置
+p_start = 600e-9;
+p_end   = 1300e-9;
+p_step  = 20e-9;
+num_pts = round((p_end - p_start)/p_step) + 1;  # =36
+
+# 输出波导长度（最小改动新增）
+wg_out_len = 5.0e-6;     # grating 之后补上的波导长度（5 µm）
+
+# 窗口按最大周期 + 输出波导预留，避免每次改仿真区尺寸
+Lg_max = gc_number * p_end;           # 50 * 1.3um = 65um
+x_min  = -6e-6; 
+x_max  =  Lg_max + wg_out_len + 6e-6; # ~71um，含 5um 出口波导+6um 缓冲
+y_min  = -(thick_BOX + Si_sub + 0.2e-6);
+y_max  =  (thick_Si + thick_Clad + 2.0e-6);
+
+src_x  = -3.0e-6;               # 源位置
+up_y_eps   = 10e-9;             # 监视线与 cladding 顶边的“贴边”距离（向内缩 10 nm）
+up_y_base  = thick_Si + thick_Clad - up_y_eps;  # 紧贴 cladding 顶边内侧
+
+# 结果存储
+M_period_nm = matrix(num_pts,1);
+M_ff        = matrix(num_pts,1);
+M_eta       = matrix(num_pts,1);
+idx = 1;
+
+# -------- 外层先放一个 FDTD（仅用于拿到窗口信息；正式仿真每轮重建）--------
+addfdtd;  FDTD_NAME = get("name");
+setnamed(FDTD_NAME,"dimension","2D");
+setnamed(FDTD_NAME,"x min",x_min); setnamed(FDTD_NAME,"x max",x_max);
+setnamed(FDTD_NAME,"y min",y_min); setnamed(FDTD_NAME,"y max",y_max);
+setnamed(FDTD_NAME,"mesh accuracy",3);
+setnamed(FDTD_NAME,"x min bc","PML"); setnamed(FDTD_NAME,"x max bc","PML");
+setnamed(FDTD_NAME,"y min bc","PML"); setnamed(FDTD_NAME,"y max bc","PML");
+setnamed(FDTD_NAME,"simulation time",2e-12);
+setglobalmonitor("frequency points",1);
+setglobalmonitor("use source limits",1);
+setglobalsource("center wavelength",lambda0);
+setglobalsource("wavelength span",1e-9);
+
+# -------- 扫描循环 --------
+for (period = p_start; period <= p_end + 1e-18; period = period + p_step) {
+
+  # 根据关系式 1.2361Λ+1.4008w=λ0 计算 ff = w/Λ
+  ff = (lambda0 - 1.2361*period) / (1.4008*period);
+
+  # 记录周期与 ff
+  M_period_nm(idx,1) = period*1e9;   # 以 nm 存
+  M_ff(idx,1)        = ff;
+
+  # 先默认该点效率为 -1（无效），如果合法再覆盖
+  M_eta(idx,1) = -1;
+
+  # 判定是否在 (0,1) 内
+  if ((ff > 0) & (ff < 1)) {
+
+    # 当前 grating 总长（恰好 50 个周期）
+    Lg = gc_number * period;
+
+    # —— 清空布局并重建（避免对象残留） ——
+    switchtolayout; selectall; delete; redrawoff;
+
+    # FDTD（每次重建，避免“只能有一个仿真区”的冲突）
+    addfdtd;  FDTD_NAME = get("name");
+    setnamed(FDTD_NAME,"dimension","2D");
+    setnamed(FDTD_NAME,"x min",x_min); setnamed(FDTD_NAME,"x max",x_max);
+    setnamed(FDTD_NAME,"y min",y_min); setnamed(FDTD_NAME,"y max",y_max);
+    setnamed(FDTD_NAME,"mesh accuracy",3);
+    setnamed(FDTD_NAME,"x min bc","PML"); setnamed(FDTD_NAME,"x max bc","PML");
+    setnamed(FDTD_NAME,"y min bc","PML"); setnamed(FDTD_NAME,"y max bc","PML");
+    setnamed(FDTD_NAME,"simulation time",2e-12);
+    setglobalmonitor("frequency points",1);
+    setglobalmonitor("use source limits",1);
+    setglobalsource("center wavelength",lambda0);
+    setglobalsource("wavelength span",1e-9);
+
+    # -------- 结构（XY；几何体不命名）--------
+    # 衬底 Si（位于 BOX 下；Si_sub=0 时不创建，避免零厚度对象）
+    if (Si_sub > 0) {
+      addrect;
+      set("material",mat_Si);
+      set("x min",x_min); set("x max",x_max);
+      set("y min",-(thick_BOX+Si_sub)); set("y max",-thick_BOX);
+      set("override mesh order from material database",1); set("mesh order",1);
+    }
+
+    # BOX (SiO2) 2 µm
+    addrect;
+    set("material",mat_SiO2);
+    set("x min",x_min); set("x max",x_max);
+    set("y min",-thick_BOX); set("y max",0);
+    set("override mesh order from material database",1); set("mesh order",2);
+
+    # 填充 Si 层（刻蚀槽为 SiO2）
+    addrect;
+    set("material",mat_SiO2);
+    set("x min",x_min); set("x max",x_max);
+    set("y min",0); set("y max",thick_Si);
+    set("override mesh order from material database",1); set("mesh order",2);
+
+    # 左侧 Si 薄膜（入射区，未刻栅）
+    addrect;
+    set("material",mat_Si);
+    set("x min",x_min); set("x max",0);
+    set("y min",0); set("y max",thick_Si);
+    set("override mesh order from material database",1); set("mesh order",4);
+
+    # 光栅齿（Si 条；槽=SiO2，220 nm 全刻蚀）—— 恰好 50 个
+    for (i=0:gc_number-1) {
+      addrect;
+      set("material",mat_Si);
+      set("x min", 0 + i*period); 
+      set("x max", 0 + i*period + ff*period);  # 齿宽 = ff*period
+      set("y min", 0); set("y max", thick_Si);
+      set("override mesh order from material database",1); set("mesh order",4);
+    }
+
+    # 顶部包层 (SiO2) 5.26 µm
+    addrect;
+    set("material",mat_SiO2);
+    set("x min",x_min); set("x max",x_max);
+    set("y min",thick_Si); set("y max",thick_Si+thick_Clad);
+    set("override mesh order from material database",1); set("mesh order",2);
+
+    # —— 在 grating 后补一段输出波导（与输入波导等厚的 Si 条）——
+    addrect;
+    set("material",mat_Si);
+    set("x min", Lg);
+    set("x max", Lg + wg_out_len);
+    set("y min", 0);
+    set("y max", thick_Si);
+    set("override mesh order from material database",1); set("mesh order",4);
+
+    redrawon;
+
+    # -------- 模式源：TE0（2D-XY 里等效用 fundamental TM）--------
+    addmode; MODE_NAME = get("name");
+    setnamed(MODE_NAME,"injection axis","x-axis");
+    setnamed(MODE_NAME,"direction","Forward");
+    setnamed(MODE_NAME,"use global source settings",1);
+    setnamed(MODE_NAME,"x",src_x);
+    setnamed(MODE_NAME,"y",0.5*thick_Si);
+    setnamed(MODE_NAME,"y span",2e-6);
+    setnamed(MODE_NAME,"mode selection","fundamental TM");
+
+    # -------- 监视器（grating 正上方；输入功率面）--------
+    addpower;   UP_NAME  = get("name");
+    setnamed(UP_NAME,"monitor type","2D Y-normal");
+    setnamed(UP_NAME,"x min",0); setnamed(UP_NAME,"x max",Lg);
+    setnamed(UP_NAME,"y", up_y_base);   # 紧贴 cladding 顶边内侧（顶边 - 10nm）
+
+    addpower;   PIN_NAME = get("name");
+    setnamed(PIN_NAME,"monitor type","2D X-normal");
+    setnamed(PIN_NAME,"x", src_x + 0.5e-6);
+    setnamed(PIN_NAME,"y min",-0.2e-6); setnamed(PIN_NAME,"y max",thick_Si + 0.8e-6);
+
+    # -------- 运行并取效率 --------
+    run;
+
+    eta = -1;
+    if (haveresult(UP_NAME,"T")) {
+      Tu  = transmission(UP_NAME);        # 源归一化
+      eta = abs(Tu(1));
+    } else {
+      if (haveresult(UP_NAME,"P") & haveresult(PIN_NAME,"P")) {
+        r1 = getresult(UP_NAME,"P");  Pup = r1.P;
+        r2 = getresult(PIN_NAME,"P"); Pin = r2.P;
+        eta = Pup/(Pin+1e-30);
+      }
+    }
+
+    # 兜底：少量版本 2D TE/TM 标签相反，切 TE 再跑
+    if (eta < 0) {
+      setnamed(MODE_NAME,"mode selection","fundamental TE");
+      run;
+      if (haveresult(UP_NAME,"T")) {
+        Tu2 = transmission(UP_NAME); eta = abs(Tu2(1));
+      } else {
+        if (haveresult(UP_NAME,"P") & haveresult(PIN_NAME,"P")) {
+          r3 = getresult(UP_NAME,"P");  Pup2 = r3.P;
+          r4 = getresult(PIN_NAME,"P"); Pin2 = r4.P;
+          eta = Pup2/(Pin2+1e-30);
+        }
+      }
+    }
+
+    M_eta(idx,1) = eta;
+    ? ("Λ = " + num2str(period*1e9) + " nm, ff = " + num2str(ff) + ", η_up = " + num2str(eta));
+
+  } else {
+    # 无效 ff，跳过仿真
+    ? ("skip Λ = " + num2str(period*1e9) + " nm, ff = " + num2str(ff) + " (invalid)");
+  }
+
+  idx = idx + 1;
+}
+
+# -------- 扫描结果汇总 --------
+eta_max = -1; eta_i = -1;
+for (k=1:num_pts) {
+  if (M_eta(k,1) > eta_max) {
+    eta_max = M_eta(k,1);
+    eta_i   = k;
+  }
+}
+
+? ("==== Sweep finished ====");
+? ("Best efficiency η_up = " + num2str(eta_max) + 
+   " at Λ = " + num2str(M_period_nm(eta_i,1)) + " nm, ff = " + num2str(M_ff(eta_i,1)));
+
+# 保存结果到 .mat（与脚本同目录）
+matlabsave("GC_sweep_relation_results", M_period_nm, M_ff, M_eta);
